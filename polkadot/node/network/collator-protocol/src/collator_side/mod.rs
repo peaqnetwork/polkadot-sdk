@@ -244,7 +244,9 @@ struct State {
 	/// never included in the fragment trees of active leaves which do. In
 	/// particular, this means that if a given relay parent belongs to implicit
 	/// ancestry of some active leaf, then it does support prospective parachains.
-	implicit_view: ImplicitView,
+	///
+	/// It's `None` if the collator is not yet collating for a paraid.
+	implicit_view: Option<ImplicitView>,
 
 	/// All active leaves observed by us, including both that do and do not
 	/// support prospective parachains. This mapping works as a replacement for
@@ -314,7 +316,7 @@ impl State {
 			metrics,
 			collating_on: Default::default(),
 			peer_data: Default::default(),
-			implicit_view: Default::default(),
+			implicit_view: None,
 			active_leaves: Default::default(),
 			per_relay_parent: Default::default(),
 			span_per_relay_parent: Default::default(),
@@ -480,11 +482,12 @@ async fn distribute_collation<Context>(
 			.filter(|(_, PeerData { view: v, .. })| match relay_parent_mode {
 				ProspectiveParachainsMode::Disabled => v.contains(&candidate_relay_parent),
 				ProspectiveParachainsMode::Enabled { .. } => v.iter().any(|block_hash| {
-					state
-						.implicit_view
-						.known_allowed_relay_parents_under(block_hash, Some(id))
-						.unwrap_or_default()
-						.contains(&candidate_relay_parent)
+					state.implicit_view.as_ref().map(|implicit_view| {
+						implicit_view
+							.known_allowed_relay_parents_under(block_hash, Some(id))
+							.unwrap_or_default()
+							.contains(&candidate_relay_parent)
+					}) == Some(true)
 				}),
 			});
 
@@ -762,6 +765,7 @@ async fn process_msg<Context>(
 	match msg {
 		CollateOn(id) => {
 			state.collating_on = Some(id);
+			state.implicit_view = Some(ImplicitView::new(Some(id)));
 		},
 		DistributeCollation(receipt, parent_head_data_hash, pov, result_sender) => {
 			let _span1 = state
@@ -1117,7 +1121,10 @@ async fn handle_peer_view_change<Context>(
 			Some(ProspectiveParachainsMode::Disabled) => std::slice::from_ref(&added),
 			Some(ProspectiveParachainsMode::Enabled { .. }) => state
 				.implicit_view
-				.known_allowed_relay_parents_under(&added, state.collating_on)
+				.as_ref()
+				.and_then(|implicit_view| {
+					implicit_view.known_allowed_relay_parents_under(&added, state.collating_on)
+				})
 				.unwrap_or_default(),
 			None => {
 				gum::trace!(
@@ -1255,21 +1262,22 @@ where
 		state.per_relay_parent.insert(*leaf, PerRelayParent::new(mode));
 
 		if mode.is_enabled() {
-			state
-				.implicit_view
-				.activate_leaf(sender, *leaf)
-				.await
-				.map_err(Error::ImplicitViewFetchError)?;
+			if let Some(ref mut implicit_view) = state.implicit_view {
+				implicit_view
+					.activate_leaf(sender, *leaf)
+					.await
+					.map_err(Error::ImplicitViewFetchError)?;
 
-			let allowed_ancestry = state
-				.implicit_view
-				.known_allowed_relay_parents_under(leaf, state.collating_on)
-				.unwrap_or_default();
-			for block_hash in allowed_ancestry {
-				state
-					.per_relay_parent
-					.entry(*block_hash)
-					.or_insert_with(|| PerRelayParent::new(mode));
+				let allowed_ancestry = implicit_view
+					.known_allowed_relay_parents_under(leaf, state.collating_on)
+					.unwrap_or_default();
+
+				for block_hash in allowed_ancestry {
+					state
+						.per_relay_parent
+						.entry(*block_hash)
+						.or_insert_with(|| PerRelayParent::new(mode));
+				}
 			}
 		}
 	}
@@ -1280,7 +1288,11 @@ where
 		// of implicit ancestry. Only update the state after the hash is actually
 		// pruned from the block info storage.
 		let pruned = if mode.is_enabled() {
-			state.implicit_view.deactivate_leaf(*leaf)
+			state
+				.implicit_view
+				.as_mut()
+				.map(|view| view.deactivate_leaf(*leaf))
+				.unwrap_or_default()
 		} else {
 			vec![*leaf]
 		};
