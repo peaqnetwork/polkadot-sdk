@@ -36,7 +36,6 @@ async fn collect_relay_storage_proof(
 	relay_chain_interface: &impl RelayChainInterface,
 	para_id: ParaId,
 	relay_parent: PHash,
-	additional_keys: Vec<Vec<u8>>,
 ) -> Option<sp_state_machine::StorageProof> {
 	use relay_chain::well_known_keys as relay_well_known_keys;
 
@@ -102,7 +101,6 @@ async fn collect_relay_storage_proof(
 		relay_well_known_keys::ONE_EPOCH_AGO_RANDOMNESS.to_vec(),
 		relay_well_known_keys::TWO_EPOCHS_AGO_RANDOMNESS.to_vec(),
 		relay_well_known_keys::CURRENT_SLOT.to_vec(),
-		relay_well_known_keys::EPOCH_INDEX.to_vec(),
 		relay_well_known_keys::ACTIVE_CONFIG.to_vec(),
 		relay_well_known_keys::dmq_mqc_head(para_id),
 		// TODO paritytech/polkadot#6283: Remove all usages of `relay_dispatch_queue_size`
@@ -123,7 +121,6 @@ async fn collect_relay_storage_proof(
 	relevant_keys.extend(egress_channels.into_iter().map(|recipient| {
 		relay_well_known_keys::hrmp_channels(HrmpChannelId { sender: para_id, recipient })
 	}));
-	relevant_keys.extend(additional_keys);
 
 	relay_chain_interface
 		.prove_read(relay_parent, &relevant_keys)
@@ -150,10 +147,9 @@ impl ParachainInherentDataProvider {
 		relay_chain_interface: &impl RelayChainInterface,
 		validation_data: &PersistedValidationData,
 		para_id: ParaId,
-		additional_keys: Vec<Vec<u8>>,
 	) -> Option<ParachainInherentData> {
 		let relay_chain_state =
-			collect_relay_storage_proof(relay_chain_interface, para_id, relay_parent, additional_keys).await?;
+			collect_relay_storage_proof(relay_chain_interface, para_id, relay_parent).await?;
 
 		let downward_messages = relay_chain_interface
 			.retrieve_dmq_contents(para_id, relay_parent)
