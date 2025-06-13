@@ -315,6 +315,8 @@ pub struct Builder<B: BlockT> {
 	///
 	/// Overwrite only with care.
 	overwrite_state_version: Option<StateVersion>,
+    /// Optional: Maximum number of keys to download per prefix. If `None`, there is no limit.
+    max_keys_per_prefix: Option<usize>,
 }
 
 impl<B: BlockT> Default for Builder<B> {
@@ -324,6 +326,7 @@ impl<B: BlockT> Default for Builder<B> {
 			hashed_key_values: Default::default(),
 			hashed_blacklist: Default::default(),
 			overwrite_state_version: None,
+			max_keys_per_prefix: None,
 		}
 	}
 }
@@ -524,6 +527,15 @@ where
 				log::debug!(target: LOG_TARGET, "last page received: {}", page_len);
 				break
 			}
+            if let Some(limit) = self.max_keys_per_prefix {
+                if keys.len() >= limit {
+                    keys.truncate(limit);
+                    debug!(target: LOG_TARGET,
+                        "key limit reached: truncated to {}",
+                        limit);
+                    break;
+                }
+            }
 
 			log::debug!(
 				target: LOG_TARGET,
@@ -1216,6 +1228,13 @@ where
 
 		Ok(ext)
 	}
+
+    /// Set the maximum number of keys to download per prefix.
+    /// If `None`, there will be no limit.
+    pub fn max_keys_per_prefix(mut self, limit: Option<usize>) -> Self {
+        self.max_keys_per_prefix = limit;
+        self
+    }
 }
 
 #[cfg(test)]
